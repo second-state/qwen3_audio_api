@@ -265,7 +265,10 @@ The `voice` field accepts OpenAI voice names (mapped to Qwen3-TTS speakers) or Q
 
 ```bash
 # Install system dependencies
-sudo apt-get install -y ffmpeg cmake
+# nasm and libclang-dev are needed to build the statically-linked ffmpeg
+sudo apt-get install -y cmake pkg-config nasm libclang-dev
+# ffmpeg binary is still needed at runtime for audio format conversion
+sudo apt-get install -y ffmpeg
 
 # Download libtorch (CPU)
 wget -q "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcpu.zip" -O libtorch.zip

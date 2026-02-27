@@ -25,9 +25,8 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          sudo apt-get update && sudo apt-get install -y ffmpeg cmake \
-            libavformat-dev libavcodec-dev libavutil-dev libavfilter-dev \
-            libavdevice-dev libswscale-dev libswresample-dev libclang-dev pkg-config
+          sudo apt-get update && sudo apt-get install -y cmake pkg-config \
+            nasm libclang-dev
 
       - name: Cache libtorch
         id: cache-libtorch
