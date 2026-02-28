@@ -56,69 +56,14 @@ fn encode_pcm(samples: &[f32]) -> Vec<u8> {
 }
 
 /// Encode audio using the statically-linked ffmpeg library.
+/// Directly creates ffmpeg audio frames from f32 samples (no WAV intermediate).
 fn encode_with_ffmpeg_lib(
     samples: &[f32],
     sample_rate: u32,
     format: ResponseFormat,
 ) -> Result<Vec<u8>, ApiError> {
-    // First encode to WAV in memory, then transcode via ffmpeg lib
-    let wav_bytes = encode_wav(samples, sample_rate)?;
-
-    // Write WAV to temp file (ffmpeg needs seekable input for some formats)
-    let mut src_file = tempfile::Builder::new()
-        .suffix(".wav")
-        .tempfile()
-        .map_err(|e| ApiError::internal(format!("Failed to create temp file: {e}")))?;
-    {
-        use std::io::Write;
-        src_file
-            .write_all(&wav_bytes)
-            .map_err(|e| ApiError::internal(format!("Failed to write temp file: {e}")))?;
-    }
-    let src_path = src_file.path().to_string_lossy().to_string();
-
-    let mut dst_file = tempfile::Builder::new()
-        .suffix(format.extension())
-        .tempfile()
-        .map_err(|e| ApiError::internal(format!("Failed to create output temp file: {e}")))?;
-    let dst_path = dst_file.path().to_string_lossy().to_string();
-
-    transcode_audio(&src_path, &dst_path, format)?;
-
-    use std::io::Read;
-    let mut output = Vec::new();
-    dst_file
-        .read_to_end(&mut output)
-        .map_err(|e| ApiError::internal(format!("Failed to read encoded output: {e}")))?;
-
-    Ok(output)
-}
-
-/// Transcode an audio file from one format to another using the ffmpeg library.
-fn transcode_audio(
-    input_path: &str,
-    output_path: &str,
-    format: ResponseFormat,
-) -> Result<(), ApiError> {
     ffmpeg_next::init()
         .map_err(|e| ApiError::internal(format!("Failed to initialize ffmpeg: {e}")))?;
-
-    let mut ictx = ffmpeg_next::format::input(input_path)
-        .map_err(|e| ApiError::internal(format!("Failed to open input: {e}")))?;
-
-    let input_stream = ictx
-        .streams()
-        .best(ffmpeg_next::media::Type::Audio)
-        .ok_or_else(|| ApiError::internal("No audio stream found in input"))?;
-    let input_stream_index = input_stream.index();
-
-    let context_decoder =
-        ffmpeg_next::codec::context::Context::from_parameters(input_stream.parameters())
-            .map_err(|e| ApiError::internal(format!("Failed to create decoder context: {e}")))?;
-    let mut decoder = context_decoder
-        .decoder()
-        .audio()
-        .map_err(|e| ApiError::internal(format!("Failed to open decoder: {e}")))?;
 
     let codec_id = match format {
         ResponseFormat::Mp3 => ffmpeg_next::codec::Id::MP3,
@@ -131,69 +76,85 @@ fn transcode_audio(
     let encoder_codec = ffmpeg_next::encoder::find(codec_id)
         .ok_or_else(|| ApiError::internal(format!("Encoder not found for {codec_id:?}")))?;
 
-    let mut octx = ffmpeg_next::format::output(output_path)
-        .map_err(|e| ApiError::internal(format!("Failed to open output: {e}")))?;
-
-    let mut output_stream = octx
-        .add_stream(encoder_codec)
-        .map_err(|e| ApiError::internal(format!("Failed to add output stream: {e}")))?;
-
-    let context_encoder =
-        ffmpeg_next::codec::context::Context::new_with_codec(encoder_codec);
-    let mut encoder = context_encoder
-        .encoder()
-        .audio()
-        .map_err(|e| ApiError::internal(format!("Failed to create encoder: {e}")))?;
-
-    // Configure encoder
-    let channel_layout = decoder.channel_layout();
-    let channel_layout = if channel_layout.is_empty() {
-        ffmpeg_next::ChannelLayout::MONO
-    } else {
-        channel_layout
-    };
-
-    encoder.set_rate(decoder.rate() as i32);
-    encoder.set_channel_layout(channel_layout);
+    // Determine encoder's preferred sample format
     let default_sample_fmt = ffmpeg_next::format::Sample::I16(
         ffmpeg_next::format::sample::Type::Packed,
     );
-    let sample_format = encoder_codec
+    let enc_sample_format = encoder_codec
         .audio()
         .ok()
         .and_then(|a| a.formats())
         .and_then(|mut f| f.next())
         .unwrap_or(default_sample_fmt);
-    encoder.set_format(sample_format);
-    if codec_id == ffmpeg_next::codec::Id::OPUS {
-        // Opus requires 48kHz
-        encoder.set_rate(48000);
+
+    let enc_rate = if codec_id == ffmpeg_next::codec::Id::OPUS {
+        48000u32
+    } else {
+        sample_rate
+    };
+
+    // Create output file
+    let mut dst_file = tempfile::Builder::new()
+        .suffix(format.extension())
+        .tempfile()
+        .map_err(|e| ApiError::internal(format!("Failed to create output temp file: {e}")))?;
+    let dst_path = dst_file.path().to_string_lossy().to_string();
+
+    let mut octx = ffmpeg_next::format::output(&dst_path)
+        .map_err(|e| ApiError::internal(format!("Failed to open output: {e}")))?;
+    let _output_stream = octx
+        .add_stream(encoder_codec)
+        .map_err(|e| ApiError::internal(format!("Failed to add output stream: {e}")))?;
+
+    // Configure encoder
+    let mut context_encoder = ffmpeg_next::codec::context::Context::new_with_codec(encoder_codec);
+
+    // If the output format requires global header, set the codec flag before opening
+    if octx.format().flags().contains(ffmpeg_next::format::flag::Flags::GLOBAL_HEADER) {
+        unsafe {
+            (*context_encoder.as_mut_ptr()).flags |=
+                ffmpeg_next::codec::flag::Flags::GLOBAL_HEADER.bits() as i32;
+        }
     }
+
+    let mut encoder = context_encoder
+        .encoder()
+        .audio()
+        .map_err(|e| ApiError::internal(format!("Failed to create encoder: {e}")))?;
+
+    encoder.set_rate(enc_rate as i32);
+    encoder.set_channel_layout(ffmpeg_next::ChannelLayout::MONO);
+    encoder.set_format(enc_sample_format);
 
     let mut encoder = encoder
         .open_as(encoder_codec)
         .map_err(|e| ApiError::internal(format!("Failed to open encoder: {e}")))?;
 
-    output_stream.set_parameters(&encoder);
+    octx.stream_mut(0)
+        .ok_or_else(|| ApiError::internal("No output stream found"))?
+        .set_parameters(&encoder);
 
     octx.write_header()
         .map_err(|e| ApiError::internal(format!("Failed to write output header: {e}")))?;
 
     let output_stream_time_base = octx.stream(0).unwrap().time_base();
 
-    // Set up resampler if needed
-    let mut resampler = if decoder.format() != encoder.format()
-        || decoder.rate() != encoder.rate()
-        || decoder.channel_layout() != encoder.channel_layout()
-    {
+    let src_format = ffmpeg_next::format::Sample::F32(ffmpeg_next::format::sample::Type::Packed);
+
+    // Check if we need a resampler (rate change or complex format conversion)
+    // For same-rate S16 encoding, convert samples directly for better compatibility
+    let needs_resampler = sample_rate != enc_rate
+        || enc_sample_format != ffmpeg_next::format::Sample::I16(ffmpeg_next::format::sample::Type::Packed);
+
+    let mut resampler = if needs_resampler {
         Some(
             ffmpeg_next::software::resampling::Context::get(
-                decoder.format(),
-                decoder.channel_layout(),
-                decoder.rate(),
-                encoder.format(),
-                encoder.channel_layout(),
-                encoder.rate(),
+                src_format,
+                ffmpeg_next::ChannelLayout::MONO,
+                sample_rate,
+                enc_sample_format,
+                ffmpeg_next::ChannelLayout::MONO,
+                enc_rate,
             )
             .map_err(|e| ApiError::internal(format!("Failed to create resampler: {e}")))?,
         )
@@ -201,56 +162,71 @@ fn transcode_audio(
         None
     };
 
-    let mut decoded_frame = ffmpeg_next::frame::Audio::empty();
+    // Process samples in chunks matching encoder frame_size
+    let frame_size = if encoder.frame_size() > 0 {
+        encoder.frame_size() as usize
+    } else {
+        1024
+    };
 
-    // Process packets
-    for (stream, packet) in ictx.packets() {
-        if stream.index() != input_stream_index {
-            continue;
-        }
-        decoder
-            .send_packet(&packet)
-            .map_err(|e| ApiError::internal(format!("Decoder send_packet error: {e}")))?;
+    let mut pts: i64 = 0;
+    let mut offset = 0;
 
-        while decoder.receive_frame(&mut decoded_frame).is_ok() {
-            let frame_to_encode = if let Some(ref mut resampler) = resampler {
-                let mut resampled = ffmpeg_next::frame::Audio::empty();
-                resampler
-                    .run(&decoded_frame, &mut resampled)
-                    .map_err(|e| ApiError::internal(format!("Resampler error: {e}")))?;
-                resampled
-            } else {
-                decoded_frame.clone()
+    while offset < samples.len() {
+        let chunk_len = std::cmp::min(frame_size, samples.len() - offset);
+        let chunk = &samples[offset..offset + chunk_len];
+
+        if let Some(ref mut resampler) = resampler {
+            // Use resampler for rate conversion or complex format changes
+            let mut frame = ffmpeg_next::frame::Audio::new(src_format, chunk_len, ffmpeg_next::ChannelLayout::MONO);
+            frame.set_rate(sample_rate);
+            frame.set_pts(Some(pts));
+
+            let data = frame.data_mut(0);
+            let byte_slice = unsafe {
+                std::slice::from_raw_parts(chunk.as_ptr() as *const u8, chunk.len() * 4)
             };
+            data[..byte_slice.len()].copy_from_slice(byte_slice);
 
-            encoder
-                .send_frame(&frame_to_encode)
-                .map_err(|e| ApiError::internal(format!("Encoder send_frame error: {e}")))?;
-
-            receive_and_write_packets(&mut encoder, &mut octx, output_stream_time_base)?;
-        }
-    }
-
-    // Flush decoder
-    decoder
-        .send_eof()
-        .map_err(|e| ApiError::internal(format!("Decoder send_eof error: {e}")))?;
-    while decoder.receive_frame(&mut decoded_frame).is_ok() {
-        let frame_to_encode = if let Some(ref mut resampler) = resampler {
             let mut resampled = ffmpeg_next::frame::Audio::empty();
             resampler
-                .run(&decoded_frame, &mut resampled)
+                .run(&frame, &mut resampled)
                 .map_err(|e| ApiError::internal(format!("Resampler error: {e}")))?;
-            resampled
+
+            if resampled.samples() > 0 {
+                encoder
+                    .send_frame(&resampled)
+                    .map_err(|e| ApiError::internal(format!("Encoder send_frame error: {e}")))?;
+                receive_and_write_packets(&mut encoder, &mut octx, output_stream_time_base)?;
+            }
         } else {
-            decoded_frame.clone()
-        };
+            // Direct S16 frame creation (no resampler, better compatibility with FLAC etc.)
+            let mut frame = ffmpeg_next::frame::Audio::new(
+                enc_sample_format,
+                chunk_len,
+                ffmpeg_next::ChannelLayout::MONO,
+            );
+            frame.set_rate(enc_rate);
+            frame.set_pts(Some(pts));
 
-        encoder
-            .send_frame(&frame_to_encode)
-            .map_err(|e| ApiError::internal(format!("Encoder send_frame error: {e}")))?;
+            // Convert f32 to i16
+            let data = frame.data_mut(0);
+            for (i, &s) in chunk.iter().enumerate() {
+                let clamped = s.clamp(-1.0, 1.0);
+                let i16_val = (clamped * 32767.0) as i16;
+                let bytes = i16_val.to_le_bytes();
+                data[i * 2] = bytes[0];
+                data[i * 2 + 1] = bytes[1];
+            }
 
-        receive_and_write_packets(&mut encoder, &mut octx, output_stream_time_base)?;
+            encoder
+                .send_frame(&frame)
+                .map_err(|e| ApiError::internal(format!("Encoder send_frame error: {e}")))?;
+            receive_and_write_packets(&mut encoder, &mut octx, output_stream_time_base)?;
+        }
+
+        pts += chunk_len as i64;
+        offset += chunk_len;
     }
 
     // Flush encoder
@@ -262,7 +238,13 @@ fn transcode_audio(
     octx.write_trailer()
         .map_err(|e| ApiError::internal(format!("Failed to write output trailer: {e}")))?;
 
-    Ok(())
+    use std::io::Read;
+    let mut output = Vec::new();
+    dst_file
+        .read_to_end(&mut output)
+        .map_err(|e| ApiError::internal(format!("Failed to read encoded output: {e}")))?;
+
+    Ok(output)
 }
 
 fn receive_and_write_packets(
@@ -272,6 +254,10 @@ fn receive_and_write_packets(
 ) -> Result<(), ApiError> {
     let mut encoded_packet = ffmpeg_next::Packet::empty();
     while encoder.receive_packet(&mut encoded_packet).is_ok() {
+        // Skip empty packets (e.g., from encoder flush)
+        if encoded_packet.size() == 0 {
+            continue;
+        }
         encoded_packet.set_stream(0);
         encoded_packet.rescale_ts(encoder.time_base(), time_base);
         encoded_packet
@@ -344,7 +330,9 @@ pub fn convert_audio_to_wav_bytes(
     Ok(output)
 }
 
-/// Transcode audio to mono WAV at the given sample rate using the ffmpeg library.
+/// Transcode audio to mono WAV at the given sample rate using ffmpeg for decoding
+/// and hound for WAV output. Decodes any audio format, converts to f32 samples,
+/// resamples if needed, then writes as 16-bit PCM WAV.
 fn transcode_to_wav(
     input_path: &str,
     output_path: &str,
@@ -370,58 +358,110 @@ fn transcode_to_wav(
         .audio()
         .map_err(|e| ApiError::internal(format!("Failed to open decoder: {e}")))?;
 
-    let encoder_codec = ffmpeg_next::encoder::find(ffmpeg_next::codec::Id::PCM_S16LE)
-        .ok_or_else(|| ApiError::internal("PCM S16LE encoder not found"))?;
-
-    let mut octx = ffmpeg_next::format::output(output_path)
-        .map_err(|e| ApiError::internal(format!("Failed to open output: {e}")))?;
-
-    let mut output_stream = octx
-        .add_stream(encoder_codec)
-        .map_err(|e| ApiError::internal(format!("Failed to add output stream: {e}")))?;
-
-    let context_encoder = ffmpeg_next::codec::context::Context::new_with_codec(encoder_codec);
-    let mut encoder = context_encoder
-        .encoder()
-        .audio()
-        .map_err(|e| ApiError::internal(format!("Failed to create encoder: {e}")))?;
-
-    encoder.set_rate(target_rate as i32);
-    encoder.set_channel_layout(ffmpeg_next::ChannelLayout::MONO);
-    encoder.set_format(ffmpeg_next::format::Sample::I16(
-        ffmpeg_next::format::sample::Type::Packed,
-    ));
-
-    let mut encoder = encoder
-        .open_as(encoder_codec)
-        .map_err(|e| ApiError::internal(format!("Failed to open encoder: {e}")))?;
-
-    output_stream.set_parameters(&encoder);
-
-    octx.write_header()
-        .map_err(|e| ApiError::internal(format!("Failed to write output header: {e}")))?;
-
-    let output_stream_time_base = octx.stream(0).unwrap().time_base();
-
-    // Set up resampler (decode format -> s16 mono at target_rate)
-    let dec_channel_layout = decoder.channel_layout();
-    let dec_channel_layout = if dec_channel_layout.is_empty() {
-        ffmpeg_next::ChannelLayout::MONO
-    } else {
-        dec_channel_layout
-    };
-
-    let mut resampler = ffmpeg_next::software::resampling::Context::get(
-        decoder.format(),
-        dec_channel_layout,
-        decoder.rate(),
-        encoder.format(),
-        encoder.channel_layout(),
-        encoder.rate(),
-    )
-    .map_err(|e| ApiError::internal(format!("Failed to create resampler: {e}")))?;
-
+    // Decode all frames and extract f32 samples
+    let mut all_samples: Vec<f32> = Vec::new();
     let mut decoded_frame = ffmpeg_next::frame::Audio::empty();
+    let mut source_rate: Option<u32> = None;
+    let mut source_channels: Option<u16> = None;
+
+    let decode_frame = |decoder: &mut ffmpeg_next::decoder::Audio,
+                            all_samples: &mut Vec<f32>,
+                            decoded_frame: &mut ffmpeg_next::frame::Audio,
+                            source_rate: &mut Option<u32>,
+                            source_channels: &mut Option<u16>|
+     -> Result<(), ApiError> {
+        while decoder.receive_frame(decoded_frame).is_ok() {
+            let rate = decoded_frame.rate();
+            let channels = decoded_frame.channels() as u16;
+            let samples = decoded_frame.samples();
+            let format = decoded_frame.format();
+
+            if source_rate.is_none() {
+                *source_rate = Some(rate);
+                *source_channels = Some(channels);
+            }
+
+            // Extract samples as f32 based on the decoded format
+            for i in 0..samples {
+                // For mono or downmix: average all channels
+                let mut sum = 0.0f32;
+                for ch in 0..channels as usize {
+                    let sample = match format {
+                        ffmpeg_next::format::Sample::I16(ffmpeg_next::format::sample::Type::Packed) => {
+                            let data = decoded_frame.data(0);
+                            let offset = (i * channels as usize + ch) * 2;
+                            if offset + 1 < data.len() {
+                                let val = i16::from_le_bytes([data[offset], data[offset + 1]]);
+                                val as f32 / 32768.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        ffmpeg_next::format::Sample::I16(ffmpeg_next::format::sample::Type::Planar) => {
+                            let data = decoded_frame.data(ch);
+                            let offset = i * 2;
+                            if offset + 1 < data.len() {
+                                let val = i16::from_le_bytes([data[offset], data[offset + 1]]);
+                                val as f32 / 32768.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        ffmpeg_next::format::Sample::I32(ffmpeg_next::format::sample::Type::Packed) => {
+                            let data = decoded_frame.data(0);
+                            let offset = (i * channels as usize + ch) * 4;
+                            if offset + 3 < data.len() {
+                                let val = i32::from_le_bytes([
+                                    data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+                                ]);
+                                val as f32 / 2147483648.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        ffmpeg_next::format::Sample::I32(ffmpeg_next::format::sample::Type::Planar) => {
+                            let data = decoded_frame.data(ch);
+                            let offset = i * 4;
+                            if offset + 3 < data.len() {
+                                let val = i32::from_le_bytes([
+                                    data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+                                ]);
+                                val as f32 / 2147483648.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        ffmpeg_next::format::Sample::F32(ffmpeg_next::format::sample::Type::Packed) => {
+                            let data = decoded_frame.data(0);
+                            let offset = (i * channels as usize + ch) * 4;
+                            if offset + 3 < data.len() {
+                                f32::from_le_bytes([
+                                    data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+                                ])
+                            } else {
+                                0.0
+                            }
+                        }
+                        ffmpeg_next::format::Sample::F32(ffmpeg_next::format::sample::Type::Planar) => {
+                            let data = decoded_frame.data(ch);
+                            let offset = i * 4;
+                            if offset + 3 < data.len() {
+                                f32::from_le_bytes([
+                                    data[offset], data[offset + 1], data[offset + 2], data[offset + 3],
+                                ])
+                            } else {
+                                0.0
+                            }
+                        }
+                        _ => 0.0,
+                    };
+                    sum += sample;
+                }
+                all_samples.push(sum / channels as f32);
+            }
+        }
+        Ok(())
+    };
 
     for (stream, packet) in ictx.packets() {
         if stream.index() != input_stream_index {
@@ -430,46 +470,72 @@ fn transcode_to_wav(
         decoder
             .send_packet(&packet)
             .map_err(|e| ApiError::internal(format!("Decoder send_packet error: {e}")))?;
-
-        while decoder.receive_frame(&mut decoded_frame).is_ok() {
-            let mut resampled = ffmpeg_next::frame::Audio::empty();
-            resampler
-                .run(&decoded_frame, &mut resampled)
-                .map_err(|e| ApiError::internal(format!("Resampler error: {e}")))?;
-
-            encoder
-                .send_frame(&resampled)
-                .map_err(|e| ApiError::internal(format!("Encoder send_frame error: {e}")))?;
-
-            receive_and_write_packets(&mut encoder, &mut octx, output_stream_time_base)?;
-        }
+        decode_frame(
+            &mut decoder,
+            &mut all_samples,
+            &mut decoded_frame,
+            &mut source_rate,
+            &mut source_channels,
+        )?;
     }
 
     // Flush decoder
     decoder
         .send_eof()
         .map_err(|e| ApiError::internal(format!("Decoder send_eof error: {e}")))?;
-    while decoder.receive_frame(&mut decoded_frame).is_ok() {
-        let mut resampled = ffmpeg_next::frame::Audio::empty();
-        resampler
-            .run(&decoded_frame, &mut resampled)
-            .map_err(|e| ApiError::internal(format!("Resampler error: {e}")))?;
+    decode_frame(
+        &mut decoder,
+        &mut all_samples,
+        &mut decoded_frame,
+        &mut source_rate,
+        &mut source_channels,
+    )?;
 
-        encoder
-            .send_frame(&resampled)
-            .map_err(|e| ApiError::internal(format!("Encoder send_frame error: {e}")))?;
-
-        receive_and_write_packets(&mut encoder, &mut octx, output_stream_time_base)?;
+    if all_samples.is_empty() {
+        return Err(ApiError::internal("No audio samples decoded from input"));
     }
 
-    // Flush encoder
-    encoder
-        .send_eof()
-        .map_err(|e| ApiError::internal(format!("Encoder send_eof error: {e}")))?;
-    receive_and_write_packets(&mut encoder, &mut octx, output_stream_time_base)?;
+    let src_rate = source_rate.unwrap_or(target_rate);
 
-    octx.write_trailer()
-        .map_err(|e| ApiError::internal(format!("Failed to write output trailer: {e}")))?;
+    // Resample if needed (simple linear interpolation)
+    let resampled = if src_rate != target_rate {
+        let ratio = target_rate as f64 / src_rate as f64;
+        let new_len = (all_samples.len() as f64 * ratio) as usize;
+        let mut output = Vec::with_capacity(new_len);
+        for i in 0..new_len {
+            let src_pos = i as f64 / ratio;
+            let idx = src_pos as usize;
+            let frac = (src_pos - idx as f64) as f32;
+            if idx + 1 < all_samples.len() {
+                output.push(all_samples[idx] * (1.0 - frac) + all_samples[idx + 1] * frac);
+            } else if idx < all_samples.len() {
+                output.push(all_samples[idx]);
+            }
+        }
+        output
+    } else {
+        all_samples
+    };
+
+    // Write as 16-bit PCM WAV using hound
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: target_rate,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut writer = hound::WavWriter::create(output_path, spec)
+        .map_err(|e| ApiError::internal(format!("Failed to create WAV writer: {e}")))?;
+    for &s in &resampled {
+        let clamped = s.clamp(-1.0, 1.0);
+        let i16_val = (clamped * 32767.0) as i16;
+        writer
+            .write_sample(i16_val)
+            .map_err(|e| ApiError::internal(format!("WAV write error: {e}")))?;
+    }
+    writer
+        .finalize()
+        .map_err(|e| ApiError::internal(format!("WAV finalize error: {e}")))?;
 
     Ok(())
 }

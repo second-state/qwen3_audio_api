@@ -275,7 +275,7 @@ ffmpeg is built from source and statically linked by default (via the `build-ffm
 
 ```bash
 # Install build dependencies
-sudo apt-get install -y cmake pkg-config nasm libclang-dev
+sudo apt-get install -y cmake pkg-config nasm libclang-dev libmp3lame-dev libopus-dev
 
 # Download libtorch (CPU)
 wget -q "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcpu.zip" -O libtorch.zip
@@ -296,7 +296,7 @@ cargo build --release
 
 ```bash
 # Install build dependencies
-brew install cmake
+brew install cmake lame opus
 
 # Build with MLX (ffmpeg is compiled from source and statically linked)
 cd rust

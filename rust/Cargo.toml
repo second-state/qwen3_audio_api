@@ -50,4 +50,4 @@ tch = { version = "0.20", optional = true }
 default = ["tch-backend", "build-ffmpeg"]
 tch-backend = ["qwen3_tts/tch-backend", "qwen3_asr/tch-backend", "tch"]
 mlx = ["qwen3_tts/mlx", "qwen3_asr/mlx"]
-build-ffmpeg = ["qwen3_asr/build-ffmpeg"]
+build-ffmpeg = ["qwen3_asr/build-ffmpeg", "ffmpeg-next/build-lib-mp3lame", "ffmpeg-next/build-lib-opus"]

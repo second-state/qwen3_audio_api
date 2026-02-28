@@ -22,7 +22,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update && sudo apt-get install -y cmake pkg-config \
-            nasm libclang-dev
+            nasm libclang-dev libmp3lame-dev libopus-dev
 
       - name: Cache libtorch
         id: cache-libtorch
