@@ -16,7 +16,6 @@ jobs:
     env:
       LIBTORCH_VERSION: "2.7.0"
       LIBTORCH_BYPASS_VERSION_CHECK: "1"
-      STATIC_LIBS: /tmp/static-libs
 
     steps:
       - uses: actions/checkout@v4
@@ -35,19 +34,39 @@ jobs:
             'https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download'
           tar xzf lame-3.100.tar.gz
           cd lame-3.100
-          ./configure --prefix=$STATIC_LIBS --enable-static --disable-shared \
+          ./configure --prefix=/usr/local --enable-static --disable-shared \
             --enable-nasm --disable-frontend
           make -j$(nproc)
-          make install
+          sudo make install
 
       - name: Build static opus
         run: |
           curl -LO https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
           tar xzf opus-1.5.2.tar.gz
           cd opus-1.5.2
-          ./configure --prefix=$STATIC_LIBS --enable-static --disable-shared
+          ./configure --prefix=/usr/local --enable-static --disable-shared
           make -j$(nproc)
-          make install
+          sudo make install
+
+      - name: Set static library environment
+        run: |
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=/usr/local/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Verify static libraries
+        run: |
+          echo "=== Verify lame ==="
+          ls -la /usr/local/lib/libmp3lame* || echo "lame .a not found!"
+          ls -la /usr/local/include/lame/ || echo "lame headers not found!"
+          echo "=== Verify opus ==="
+          ls -la /usr/local/lib/libopus* || echo "opus .a not found!"
+          ls -la /usr/local/lib/pkgconfig/opus.pc || echo "opus.pc not found!"
+          cat /usr/local/lib/pkgconfig/opus.pc
+          echo "=== pkg-config test ==="
+          pkg-config --libs --cflags opus
+          echo "=== No shared libs ==="
+          ! ls /usr/local/lib/libmp3lame*.so* 2>/dev/null && echo "PASS: no lame .so"
+          ! ls /usr/local/lib/libopus*.so* 2>/dev/null && echo "PASS: no opus .so"
 
       - name: Cache libtorch
         id: cache-libtorch
@@ -75,16 +94,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: cargo-release-linux-v3-${{ hashFiles('rust/Cargo.toml') }}
-          restore-keys: cargo-release-linux-v3-
+          key: cargo-release-linux-v4-${{ hashFiles('rust/Cargo.toml') }}
+          restore-keys: cargo-release-linux-v4-
 
       - name: Build
         working-directory: rust
-        env:
-          PKG_CONFIG_PATH: /tmp/static-libs/lib/pkgconfig
-          CFLAGS: "-I/tmp/static-libs/include"
-          LDFLAGS: "-L/tmp/static-libs/lib"
-          LIBRARY_PATH: /tmp/static-libs/lib
         run: cargo build --release
 
       - name: Verify no dynamic lame/opus dependency
@@ -114,9 +128,6 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 60
 
-    env:
-      STATIC_LIBS: /tmp/static-libs
-
     steps:
       - uses: actions/checkout@v4
 
@@ -132,19 +143,39 @@ jobs:
             'https://sourceforge.net/projects/lame/files/lame/3.100/lame-3.100.tar.gz/download'
           tar xzf lame-3.100.tar.gz
           cd lame-3.100
-          ./configure --prefix=$STATIC_LIBS --enable-static --disable-shared \
+          ./configure --prefix=/usr/local --enable-static --disable-shared \
             --disable-frontend
           make -j$(sysctl -n hw.ncpu)
-          make install
+          sudo make install
 
       - name: Build static opus
         run: |
           curl -LO https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
           tar xzf opus-1.5.2.tar.gz
           cd opus-1.5.2
-          ./configure --prefix=$STATIC_LIBS --enable-static --disable-shared
+          ./configure --prefix=/usr/local --enable-static --disable-shared
           make -j$(sysctl -n hw.ncpu)
-          make install
+          sudo make install
+
+      - name: Set static library environment
+        run: |
+          echo "PKG_CONFIG_PATH=/usr/local/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> $GITHUB_ENV
+          echo "CFLAGS=-I/usr/local/include" >> $GITHUB_ENV
+          echo "LDFLAGS=-L/usr/local/lib" >> $GITHUB_ENV
+          echo "LIBRARY_PATH=/usr/local/lib${LIBRARY_PATH:+:$LIBRARY_PATH}" >> $GITHUB_ENV
+
+      - name: Verify static libraries
+        run: |
+          echo "=== Verify lame ==="
+          ls -la /usr/local/lib/libmp3lame* || echo "lame .a not found!"
+          echo "=== Verify opus ==="
+          ls -la /usr/local/lib/libopus* || echo "opus .a not found!"
+          ls -la /usr/local/lib/pkgconfig/opus.pc || echo "opus.pc not found!"
+          echo "=== pkg-config test ==="
+          pkg-config --libs --cflags opus
+          echo "=== No shared libs ==="
+          ! ls /usr/local/lib/libmp3lame*.dylib 2>/dev/null && echo "PASS: no lame .dylib"
+          ! ls /usr/local/lib/libopus*.dylib 2>/dev/null && echo "PASS: no opus .dylib"
 
       - name: Cache cargo registry & build
         uses: actions/cache@v4
@@ -153,16 +184,11 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: cargo-release-macos-arm64-v3-${{ hashFiles('rust/Cargo.toml') }}
-          restore-keys: cargo-release-macos-arm64-v3-
+          key: cargo-release-macos-arm64-v4-${{ hashFiles('rust/Cargo.toml') }}
+          restore-keys: cargo-release-macos-arm64-v4-
 
       - name: Build with MLX backend
         working-directory: rust
-        env:
-          PKG_CONFIG_PATH: /tmp/static-libs/lib/pkgconfig
-          CFLAGS: "-I/tmp/static-libs/include"
-          LDFLAGS: "-L/tmp/static-libs/lib"
-          LIBRARY_PATH: /tmp/static-libs/lib
         run: cargo build --release --no-default-features --features "mlx build-ffmpeg"
 
       - name: Verify no dynamic lame/opus dependency
