@@ -32,7 +32,7 @@ The **Rust** implementation is a high-performance axum/tokio server built on the
 
 The purpose of these API servers is to provide self-hosted, free backend audio services for projects such as:
 
-- [Clawdbot](https://github.com/clawdbot/clawdbot) — AI agent
+- [OpenClaw](https://github.com/openclaw/openclaw) — AI agent
 - [EchoKit](https://github.com/second-state/echokit_server) — Voice AI device
 - [Olares](https://github.com/beclab/Olares) — Personal AI cloud OS
 - [GaiaNet](https://github.com/GaiaNet-AI/gaianet-node) — Incentivized AI agent network and marketplace
