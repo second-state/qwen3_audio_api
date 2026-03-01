@@ -288,20 +288,38 @@ All formats are handled natively by the statically-linked ffmpeg library. No ext
 
 ffmpeg is built from source and statically linked by default (via the `build-ffmpeg` feature). You do **not** need ffmpeg installed.
 
-### Linux (libtorch backend)
+### Linux x86_64 (libtorch backend)
 
 ```bash
 # Install build dependencies
 sudo apt-get install -y cmake pkg-config nasm libclang-dev libmp3lame-dev libopus-dev
 
 # Download libtorch (CPU)
-wget -q "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcpu.zip" -O libtorch.zip
+wget -q "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip" -O libtorch.zip
 unzip -q libtorch.zip && rm libtorch.zip
 export LIBTORCH=$(pwd)/libtorch
 export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH
 
 # For CUDA 12.8 instead, download:
-# wget -q "https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu128.zip" -O libtorch.zip
+# wget -q "https://download.pytorch.org/libtorch/cu128/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcu128.zip" -O libtorch.zip
+
+# Build (ffmpeg is compiled from source and statically linked)
+cd rust
+cargo build --release
+# Binary at: target/release/qwen3-audio-api
+```
+
+### Linux aarch64 (libtorch backend)
+
+```bash
+# Install build dependencies
+sudo apt-get install -y cmake pkg-config nasm libclang-dev libmp3lame-dev libopus-dev
+
+# Download libtorch (CPU, aarch64)
+wget -q "https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz" -O libtorch.tar.gz
+tar xzf libtorch.tar.gz && rm libtorch.tar.gz
+export LIBTORCH=$(pwd)/libtorch
+export LD_LIBRARY_PATH=$LIBTORCH/lib:$LD_LIBRARY_PATH
 
 # Build (ffmpeg is compiled from source and statically linked)
 cd rust
