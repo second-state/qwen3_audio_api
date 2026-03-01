@@ -21,13 +21,11 @@ curl -LO https://github.com/second-state/qwen3_audio_api/releases/latest/downloa
 tar xzf qwen3-audio-api-linux-x86_64.tar.gz
 cd qwen3-audio-api-linux-x86_64
 
-# Set libtorch library path (bundled in the archive)
-export LD_LIBRARY_PATH=$(pwd)/libtorch/lib:$LD_LIBRARY_PATH
-
 # Download models (see "Download models" section below)
 # ...
 
 # Run the server with TTS + ASR
+# (libtorch is found automatically via RPATH — no LD_LIBRARY_PATH needed)
 TTS_CUSTOMVOICE_MODEL_PATH=/path/to/models/Qwen3-TTS-12Hz-0.6B-CustomVoice \
   TTS_BASE_MODEL_PATH=/path/to/models/Qwen3-TTS-12Hz-0.6B-Base \
   ASR_MODEL_PATH=/path/to/models/Qwen3-ASR-0.6B \
