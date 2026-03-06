@@ -10,7 +10,6 @@ jobs:
     timeout-minutes: 120
 
     env:
-      LIBTORCH_VERSION: "2.7.0"
       LIBTORCH_BYPASS_VERSION_CHECK: "1"
 
     steps:
@@ -26,9 +25,9 @@ jobs:
 
       - name: Download libtorch
         run: |
-          wget -q "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip" -O libtorch.zip
-          unzip -q libtorch.zip
-          rm libtorch.zip
+          curl -Lo libtorch.tar.gz "https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-x86_64-2.7.1.tar.gz"
+          tar xzf libtorch.tar.gz
+          rm libtorch.tar.gz
 
       - name: Set libtorch environment
         run: |

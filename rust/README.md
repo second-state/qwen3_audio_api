@@ -293,20 +293,24 @@ cp target/release/build/qwen3_tts-*/out/lib/mlx.metallib target/release/
 
 #### Download libtorch
 
-Download and extract libtorch for your platform:
+Download and extract libtorch for your platform from [libtorch-releases](https://github.com/second-state/libtorch-releases/releases/tag/v2.7.1):
 
 ```bash
 # Linux x86_64 (CPU)
-curl -LO https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.7.1%2Bcpu.zip
-unzip libtorch-cxx11-abi-shared-with-deps-2.7.1+cpu.zip
+curl -LO https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-x86_64-2.7.1.tar.gz
+tar xzf libtorch-cxx11-abi-x86_64-2.7.1.tar.gz
 
 # Linux x86_64 (CUDA 12.6)
-curl -LO https://download.pytorch.org/libtorch/cu126/libtorch-cxx11-abi-shared-with-deps-2.7.0%2Bcu126.zip
-unzip libtorch-cxx11-abi-shared-with-deps-2.7.0+cu126.zip
+curl -LO https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-x86_64-cuda12.6-2.7.1.tar.gz
+tar xzf libtorch-cxx11-abi-x86_64-cuda12.6-2.7.1.tar.gz
 
 # Linux aarch64 (CPU)
 curl -LO https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz
 tar xzf libtorch-cxx11-abi-aarch64-2.7.1.tar.gz
+
+# Linux aarch64 (CUDA 12.6 / Jetson)
+curl -LO https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-cuda12.6-2.7.1.tar.gz
+tar xzf libtorch-cxx11-abi-aarch64-cuda12.6-2.7.1.tar.gz
 ```
 
 #### Set environment variables

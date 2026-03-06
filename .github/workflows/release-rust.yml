@@ -14,7 +14,6 @@ jobs:
     timeout-minutes: 60
 
     env:
-      LIBTORCH_VERSION: "2.7.0"
       LIBTORCH_BYPASS_VERSION_CHECK: "1"
 
     steps:
@@ -30,9 +29,9 @@ jobs:
 
       - name: Download libtorch
         run: |
-          wget -q "https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2Bcpu.zip" -O libtorch.zip
-          unzip -q libtorch.zip
-          rm libtorch.zip
+          curl -Lo libtorch.tar.gz "https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-x86_64-2.7.1.tar.gz"
+          tar xzf libtorch.tar.gz
+          rm libtorch.tar.gz
 
       - name: Set libtorch environment
         run: |
@@ -51,13 +50,9 @@ jobs:
         run: |
           mkdir -p staging/qwen3-audio-api-linux-x86_64/lib
 
-          # Copy binary
           cp rust/target/release/qwen3-audio-api staging/qwen3-audio-api-linux-x86_64/
-
-          # Bundle libtorch
           cp -r libtorch staging/qwen3-audio-api-linux-x86_64/
 
-          # Bundle lame/opus shared libraries if dynamically linked
           for lib in mp3lame opus; do
             so_file=$(ldd rust/target/release/qwen3-audio-api | grep "lib${lib}" | awk '{print $3}')
             if [ -n "$so_file" ] && [ -f "$so_file" ]; then
@@ -66,15 +61,8 @@ jobs:
             fi
           done
 
-          # Set RPATH so binary finds bundled libs at runtime
           patchelf --set-rpath '$ORIGIN/lib:$ORIGIN/libtorch/lib' \
             staging/qwen3-audio-api-linux-x86_64/qwen3-audio-api
-
-          # Verify
-          echo "=== Bundled libraries ==="
-          ls -la staging/qwen3-audio-api-linux-x86_64/lib/ || echo "(no extra libs needed)"
-          echo "=== RPATH ==="
-          patchelf --print-rpath staging/qwen3-audio-api-linux-x86_64/qwen3-audio-api
 
           tar -czf qwen3-audio-api-linux-x86_64.tar.gz -C staging qwen3-audio-api-linux-x86_64
 
@@ -89,9 +77,7 @@ jobs:
     timeout-minutes: 90
 
     env:
-      LIBTORCH_VERSION: "2.7.0"
       LIBTORCH_BYPASS_VERSION_CHECK: "1"
-      CUDA_VERSION: "cu126"
 
     steps:
       - uses: actions/checkout@v4
@@ -104,16 +90,24 @@ jobs:
           sudo apt-get update && sudo apt-get install -y cmake pkg-config \
             nasm libclang-dev libmp3lame-dev libopus-dev patchelf
 
+      - name: Install CUDA toolkit (for linking)
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda-toolkit-12-6
+
       - name: Download libtorch (CUDA)
         run: |
-          wget -q "https://download.pytorch.org/libtorch/${CUDA_VERSION}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${CUDA_VERSION}.zip" -O libtorch.zip
-          unzip -q libtorch.zip
-          rm libtorch.zip
+          curl -Lo libtorch.tar.gz "https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-x86_64-cuda12.6-2.7.1.tar.gz"
+          tar xzf libtorch.tar.gz
+          rm libtorch.tar.gz
 
       - name: Set libtorch environment
         run: |
           echo "LIBTORCH=$(pwd)/libtorch" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=$(pwd)/libtorch/lib:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$(pwd)/libtorch/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C link-arg=-Wl,-rpath-link,$(pwd)/libtorch/lib -C link-arg=-Wl,-rpath-link,/usr/local/cuda/lib64" >> $GITHUB_ENV
 
       - name: Force latest qwen3_tts and qwen3_asr from HEAD
         working-directory: rust
@@ -127,12 +121,9 @@ jobs:
         run: |
           mkdir -p staging/qwen3-audio-api-linux-x86_64-cuda/lib
 
-          # Copy binary
           cp rust/target/release/qwen3-audio-api staging/qwen3-audio-api-linux-x86_64-cuda/
+          cp -r libtorch staging/qwen3-audio-api-linux-x86_64-cuda/
 
-          # Do NOT bundle libtorch — users provide their own CUDA libtorch at runtime
-
-          # Bundle lame/opus shared libraries if dynamically linked
           for lib in mp3lame opus; do
             so_file=$(ldd rust/target/release/qwen3-audio-api | grep "lib${lib}" | awk '{print $3}')
             if [ -n "$so_file" ] && [ -f "$so_file" ]; then
@@ -141,15 +132,8 @@ jobs:
             fi
           done
 
-          # Set RPATH so binary finds libtorch in a sibling directory at runtime
           patchelf --set-rpath '$ORIGIN/lib:$ORIGIN/libtorch/lib' \
             staging/qwen3-audio-api-linux-x86_64-cuda/qwen3-audio-api
-
-          # Verify
-          echo "=== Bundled libraries ==="
-          ls -la staging/qwen3-audio-api-linux-x86_64-cuda/lib/ || echo "(no extra libs needed)"
-          echo "=== RPATH ==="
-          patchelf --print-rpath staging/qwen3-audio-api-linux-x86_64-cuda/qwen3-audio-api
 
           tar -czf qwen3-audio-api-linux-x86_64-cuda.tar.gz -C staging qwen3-audio-api-linux-x86_64-cuda
 
@@ -164,7 +148,6 @@ jobs:
     timeout-minutes: 60
 
     env:
-      LIBTORCH_VERSION: "2.7.1"
       LIBTORCH_BYPASS_VERSION_CHECK: "1"
 
     steps:
@@ -180,7 +163,7 @@ jobs:
 
       - name: Download libtorch
         run: |
-          wget -q "https://github.com/second-state/libtorch-releases/releases/download/v${LIBTORCH_VERSION}/libtorch-cxx11-abi-aarch64-${LIBTORCH_VERSION}.tar.gz" -O libtorch.tar.gz
+          curl -Lo libtorch.tar.gz "https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-2.7.1.tar.gz"
           tar xzf libtorch.tar.gz
           rm libtorch.tar.gz
 
@@ -201,13 +184,9 @@ jobs:
         run: |
           mkdir -p staging/qwen3-audio-api-linux-aarch64/lib
 
-          # Copy binary
           cp rust/target/release/qwen3-audio-api staging/qwen3-audio-api-linux-aarch64/
-
-          # Bundle libtorch
           cp -r libtorch staging/qwen3-audio-api-linux-aarch64/
 
-          # Bundle lame/opus shared libraries if dynamically linked
           for lib in mp3lame opus; do
             so_file=$(ldd rust/target/release/qwen3-audio-api | grep "lib${lib}" | awk '{print $3}')
             if [ -n "$so_file" ] && [ -f "$so_file" ]; then
@@ -216,15 +195,8 @@ jobs:
             fi
           done
 
-          # Set RPATH so binary finds bundled libs at runtime
           patchelf --set-rpath '$ORIGIN/lib:$ORIGIN/libtorch/lib' \
             staging/qwen3-audio-api-linux-aarch64/qwen3-audio-api
-
-          # Verify
-          echo "=== Bundled libraries ==="
-          ls -la staging/qwen3-audio-api-linux-aarch64/lib/ || echo "(no extra libs needed)"
-          echo "=== RPATH ==="
-          patchelf --print-rpath staging/qwen3-audio-api-linux-aarch64/qwen3-audio-api
 
           tar -czf qwen3-audio-api-linux-aarch64.tar.gz -C staging qwen3-audio-api-linux-aarch64
 
@@ -233,6 +205,77 @@ jobs:
         with:
           name: linux-aarch64
           path: qwen3-audio-api-linux-aarch64.tar.gz
+
+  build-linux-arm-cuda:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 90
+
+    env:
+      LIBTORCH_BYPASS_VERSION_CHECK: "1"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake pkg-config \
+            nasm libclang-dev libmp3lame-dev libopus-dev patchelf
+
+      - name: Install CUDA toolkit and BLAS (for linking)
+        run: |
+          wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/sbsa/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i cuda-keyring_1.1-1_all.deb
+          sudo apt-get update
+          sudo apt-get install -y cuda-toolkit-12-6 libopenblas-dev
+
+      - name: Download libtorch (CUDA)
+        run: |
+          curl -Lo libtorch.tar.gz "https://github.com/second-state/libtorch-releases/releases/download/v2.7.1/libtorch-cxx11-abi-aarch64-cuda12.6-2.7.1.tar.gz"
+          tar xzf libtorch.tar.gz
+          rm libtorch.tar.gz
+
+      - name: Set libtorch environment
+        run: |
+          echo "LIBTORCH=$(pwd)/libtorch" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$(pwd)/libtorch/lib:/usr/local/cuda/lib64:$LD_LIBRARY_PATH" >> $GITHUB_ENV
+          echo "RUSTFLAGS=-C link-arg=-Wl,-rpath-link,$(pwd)/libtorch/lib -C link-arg=-Wl,-rpath-link,/usr/local/cuda/lib64" >> $GITHUB_ENV
+
+      - name: Force latest qwen3_tts and qwen3_asr from HEAD
+        working-directory: rust
+        run: rm Cargo.lock
+
+      - name: Build
+        working-directory: rust
+        run: cargo build --release
+
+      - name: Package archive
+        run: |
+          mkdir -p staging/qwen3-audio-api-linux-aarch64-cuda/lib
+
+          cp rust/target/release/qwen3-audio-api staging/qwen3-audio-api-linux-aarch64-cuda/
+          cp -r libtorch staging/qwen3-audio-api-linux-aarch64-cuda/
+
+          for lib in mp3lame opus; do
+            so_file=$(ldd rust/target/release/qwen3-audio-api | grep "lib${lib}" | awk '{print $3}')
+            if [ -n "$so_file" ] && [ -f "$so_file" ]; then
+              echo "Bundling $so_file"
+              cp "$so_file" staging/qwen3-audio-api-linux-aarch64-cuda/lib/
+            fi
+          done
+
+          patchelf --set-rpath '$ORIGIN/lib:$ORIGIN/libtorch/lib' \
+            staging/qwen3-audio-api-linux-aarch64-cuda/qwen3-audio-api
+
+          tar -czf qwen3-audio-api-linux-aarch64-cuda.tar.gz -C staging qwen3-audio-api-linux-aarch64-cuda
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-aarch64-cuda
+          path: qwen3-audio-api-linux-aarch64-cuda.tar.gz
 
   build-macos:
     runs-on: macos-14
@@ -271,11 +314,9 @@ jobs:
 
           mkdir -p staging/qwen3-audio-api-macos-arm64/lib
 
-          # Bundle any dynamically linked lame/opus libs and fix paths
           for lib in mp3lame opus; do
             dylib_ref=$(otool -L "$BINARY" | grep "lib${lib}" | awk '{print $1}')
             if [ -n "$dylib_ref" ]; then
-              # Find the actual dylib file
               dylib_file=$(echo "$dylib_ref" | sed 's|@rpath/||')
               if [ -f "$dylib_ref" ]; then
                 dylib_file="$dylib_ref"
@@ -284,7 +325,6 @@ jobs:
               fi
               echo "Bundling $dylib_file (ref: $dylib_ref)"
               cp "$dylib_file" staging/qwen3-audio-api-macos-arm64/lib/
-              # Rewrite the reference to use @executable_path/lib/
               install_name_tool -change "$dylib_ref" \
                 "@executable_path/lib/$(basename $dylib_file)" "$BINARY"
             fi
@@ -292,12 +332,6 @@ jobs:
 
           cp "$BINARY" staging/qwen3-audio-api-macos-arm64/
           cp "$METALLIB" staging/qwen3-audio-api-macos-arm64/
-
-          # Verify
-          echo "=== Final otool -L ==="
-          otool -L staging/qwen3-audio-api-macos-arm64/qwen3-audio-api
-          echo "=== Bundled libraries ==="
-          ls -la staging/qwen3-audio-api-macos-arm64/lib/ || echo "(no extra libs needed)"
 
           tar -czf qwen3-audio-api-macos-arm64.tar.gz -C staging qwen3-audio-api-macos-arm64
 
@@ -350,7 +384,7 @@ jobs:
           path: tokenizer-*.json
 
   release:
-    needs: [build-linux, build-linux-cuda, build-linux-arm, build-macos, generate-tokenizers]
+    needs: [build-linux, build-linux-cuda, build-linux-arm, build-linux-arm-cuda, build-macos, generate-tokenizers]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -371,6 +405,11 @@ jobs:
         with:
           name: linux-aarch64
 
+      - name: Download Linux ARM CUDA artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: linux-aarch64-cuda
+
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
@@ -389,5 +428,6 @@ jobs:
             qwen3-audio-api-linux-x86_64.tar.gz
             qwen3-audio-api-linux-x86_64-cuda.tar.gz
             qwen3-audio-api-linux-aarch64.tar.gz
+            qwen3-audio-api-linux-aarch64-cuda.tar.gz
             qwen3-audio-api-macos-arm64.tar.gz
             tokenizer-*.json
